@@ -1,4 +1,5 @@
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
+{-# OPTIONS_GHC -fclear-plugins #-}
 
 -- | The client
 module Calamity.Client.Client
@@ -108,8 +109,8 @@ runBotIO token setup = runBotIO' token Nothing Nothing Nothing setup
 
 resetDi :: BotC r => P.Sem r a -> P.Sem r a
 resetDi m = do
-  initialDi <- P.asks (^. #initialDi)
-  Di.local (flip fromMaybe initialDi) m
+  initialDi <- P.asks @Client (^. #initialDi)
+  Di.local @Df1.Level @Df1.Path @Df1.Message (flip fromMaybe initialDi) m
 
 -- | Create a bot, run your setup action, and then loop until the bot closes.
 --
@@ -130,14 +131,14 @@ runBotIO' token session status intents setup = do
   session' <- maybe (P.embed newAPISession) pure session
   client <- P.embed $ newClient token session' initialDi
   handlers <- P.embed $ newTVarIO def
-  P.asyncToIOFinal . P.runAtomicStateTVar handlers . P.runReader client . Di.push "calamity" $ do
-    void $ Di.push "calamity-setup" setup
+  P.asyncToIOFinal . P.runAtomicStateTVar handlers . P.runReader client . Di.push @Df1.Level @Df1.Message "calamity" $ do
+    void $ Di.push @Df1.Level @Df1.Message "calamity-setup" setup
     r <- shardBot status intents
     case r of
       Left e  -> pure (Just e)
       Right _ -> do
-        Di.push "calamity-loop" clientLoop
-        Di.push "calamity-stop" finishUp
+        Di.push @Df1.Level @Df1.Message "calamity-loop" clientLoop
+        Di.push @Df1.Level @Df1.Message "calamity-stop" finishUp
         pure Nothing
 
 -- | Register an event handler, returning an action that removes the event handler from the bot.
@@ -174,7 +175,7 @@ react :: forall (s :: EventType) r.
       -> P.Sem r (P.Sem r ())
 react handler = do
   handler' <- bindSemToIO handler
-  ehidC <- P.asks (^. #ehidCounter)
+  ehidC <- P.asks @Client (^. #ehidCounter)
   id' <- P.embed $ atomicModifyIORef ehidC (\i -> (i + 1, i))
   let handlers = makeEventHandlers (Proxy @s) id' (const () <.> handler')
   P.atomicModify (handlers <>)
@@ -194,7 +195,7 @@ removeHandler id' = P.atomicModify (removeEventHandler (Proxy @s) id')
 -- @
 fire :: BotC r => CalamityEvent -> P.Sem r ()
 fire e = do
-  inc <- P.asks (^. #eventsIn)
+  inc <- P.asks @Client (^. #eventsIn)
   P.embed $ writeChan inc e
 
 -- | Build a Custom CalamityEvent
@@ -217,7 +218,7 @@ customEvt x = Custom (typeRep $ Proxy @s) (toDyn x)
 -- | Get a copy of the event stream.
 events :: BotC r => P.Sem r (OutChan CalamityEvent)
 events = do
-  inc <- P.asks (^. #eventsIn)
+  inc <- P.asks @Client (^. #eventsIn)
   P.embed $ dupChan inc
 
 -- | Wait until an event satisfying a condition happens, then returns it's
@@ -304,7 +305,7 @@ waitUntilM f = P.resourceToIOFinal $ do
 -- | Set the bot's presence on all shards.
 sendPresence :: BotC r => StatusUpdateData -> P.Sem r ()
 sendPresence s = do
-  shards <- P.asks (^. #shards) >>= P.embed . readTVarIO
+  shards <- P.asks @Client (^. #shards) >>= P.embed . readTVarIO
   for_ shards $ \(inc, _) ->
     P.embed $ writeChan inc (SendPresence s)
 
@@ -312,13 +313,13 @@ sendPresence s = do
 stopBot :: BotC r => P.Sem r ()
 stopBot = do
   debug "stopping bot"
-  inc <- P.asks (^. #eventsIn)
+  inc <- P.asks @Client (^. #eventsIn)
   P.embed $ writeChan inc ShutDown
 
 finishUp :: BotC r => P.Sem r ()
 finishUp = do
   debug "finishing up"
-  shards <- P.asks (^. #shards) >>= P.embed . readTVarIO
+  shards <- P.asks @Client (^. #shards) >>= P.embed . readTVarIO
   for_ shards $ \(inc, _) ->
     P.embed $ writeChan inc ShutDownShard
   for_ shards $ \(_, shardThread) -> P.await shardThread
@@ -328,7 +329,7 @@ finishUp = do
 -- event and invoking it's handler functions
 clientLoop :: BotC r => P.Sem r ()
 clientLoop = do
-  outc <- P.asks (^. #eventsOut)
+  outc <- P.asks @Client (^. #eventsOut)
   whileMFinalIO $ do
     evt' <- P.embed $ readChan outc
     case evt' of
@@ -348,7 +349,7 @@ handleCustomEvent s d = do
 
 catchAllLogging :: BotC r => P.Sem r () -> P.Sem r ()
 catchAllLogging m = do
-  r <- P.errorToIOFinal . P.fromExceptionSem @SomeException $ P.raise m
+  r <- P.errorToIOFinal @SomeException . P.fromExceptionSem @SomeException $ P.raise m
   case r of
     Right _ -> pure ()
     Left e -> debug $ "got exception: " +|| e ||+ ""
